@@ -1,0 +1,17 @@
+---
+alwaysApply: true
+---
+We are building a high-frequency market-making bot. All development must align with the vision in @roadmap.md.
+
+## Core Directives
+1. **Context Awareness:** Always refer to @roadmap.md to see which Phase we are currently in.
+2. **Modular Architecture:** Follow the directory structure defined in Step 1 of the roadmap (app/core, app/data, etc.).
+3. **Tech Stack Enforcement:**
+   - Use **Asynchronous Python** (`asyncio`) and `ccxt` for data streaming.
+   - Use **TimescaleDB** for historical SQL data and **Redis** for real-time caching.
+   - Use **Pydantic-settings** for all configuration (refer to @app/core).
+4. **Step-by-Step Execution:** Do not skip ahead to Phase 4 while we are working on Phase 1. Focus on building robust "Data Reactor" infrastructure first.
+
+## Coding Style
+- Prefer `pipfreeze > requirements.txt` for dependency management.
+- Always include a `.gitignore` to prevent committing `venv/` or `.env`.

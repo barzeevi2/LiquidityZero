@@ -1,0 +1,24 @@
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg17
+    container_name: liquidity_db
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=liquidity_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+    restart: always
+
+
+  redis:
+    image: redis:alpine
+    container_name: liquidity_redis
+    ports:
+      - "6379:6379"
+    restart: always
+
+volumes:
+  timescaledb_data:
