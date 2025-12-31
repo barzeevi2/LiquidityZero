@@ -5,7 +5,7 @@ Handles reconnection logic with exponential backoff.
 
 import asyncio
 import logging
-import ccxt.pro as ccxt
+import ccxt.pro
 from typing import AsyncIterator, Dict, Any, Optional
 from datetime import datetime, timezone
 
@@ -40,7 +40,7 @@ class OrderBookStreamer:
         self.max_backoff = max_backoff
         self.backoff_multiplier = backoff_multiplier
 
-        self.exchange: Optional[ccxt.binance] = None
+        self.exchange: Optional[ccxt.pro.binance] = None
         self.is_running = False
         self.reconnect_count = 0
         self.last_message_time: Optional[datetime] = None
@@ -108,12 +108,12 @@ class OrderBookStreamer:
         }
         return normalized
 
-    async def _create_exchange(self) -> ccxt.binance:
+    async def _create_exchange(self) -> ccxt.pro.binance:
         """
         creates and configures ccxt exchange instance (binance for now)
         returns the configured instance
         """
-        exchange = ccxt.binance({
+        exchange = ccxt.pro.binance({
             'apiKey': '',
             'secret': '',
             'enableRateLimit': True,
@@ -150,8 +150,10 @@ class OrderBookStreamer:
                 self.exchange = await self._create_exchange()
                 logger.info(f"connecting to binance WebSocket for {self.symbol}...")
 
-                #stream updates
-                async for orderbook in self.exchange.watch_order_book(self.symbol):
+                #watch_order_book returns a coroutine that resolves to a single orderbook
+                while self.is_running:
+                    orderbook = await self.exchange.watch_order_book(self.symbol)
+                    
                     if not self.is_running:
                         break
 
