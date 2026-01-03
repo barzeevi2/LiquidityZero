@@ -171,6 +171,13 @@ class StorageEngine:
                 await asyncio.sleep(backoff)
         return 0
 
+    async def write_batch(self, snapshots: List[Dict[str, Any]]) -> int:
+        """
+        Public method to write a batch of order book snapshots to the database.
+        This is a wrapper around _write_batch for better API design.
+        """
+        return await self._write_batch(snapshots)
+
     
     async def close(self):
         """

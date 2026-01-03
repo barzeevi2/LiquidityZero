@@ -31,5 +31,16 @@ services:
       - "6379:6379"
     restart: always
 
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: liquidity_redis_commander
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+    restart: always
+
 volumes:
   timescaledb_data:
