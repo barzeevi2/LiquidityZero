@@ -36,6 +36,7 @@ class DataBuffer:
 
         self.queue: asyncio.Queue = asyncio.Queue(maxsize=max_size)
         self.last_flush_time: Optional[datetime] = None
+        self.first_item_time: Optional[datetime] = None  
         self.total_processed = 0
         self.total_dropped = 0
     
@@ -49,6 +50,8 @@ class DataBuffer:
         """
         try:
             await asyncio.wait_for(self.queue.put(data), timeout = 0.1)
+            if self.first_item_time is None:
+                self.first_item_time = datetime.now(timezone.utc)
             return True
         except asyncio.TimeoutError:
             #queue is full
@@ -80,6 +83,8 @@ class DataBuffer:
         
         if items:
             self.last_flush_time = datetime.now(timezone.utc)
+            if self.first_item_time is not None:
+                self.first_item_time = None
             logger.debug(f"Flushed {len(items)} items from buffer")
         return items
     
@@ -111,6 +116,8 @@ class DataBuffer:
         if batch:
             self.total_processed += len(batch)
             self.last_flush_time = datetime.now(timezone.utc)
+            if self.first_item_time is not None:
+                self.first_item_time = None
             logger.debug(f"Retrieved batch of {len(batch)} items from buffer")
         return batch
 
@@ -119,10 +126,15 @@ class DataBuffer:
     def should_flush_by_time(self) -> bool:
         """
         checks if buffer should flush based on time interval
-        returns true if flush interval has passed since last flush
+        returns true if flush interval has passed since last flush (or first item if never flushed)
         """
+        # if we have items but never flushed, check time since first item
         if self.last_flush_time is None:
-            return False
+            if self.first_item_time is None or self.queue.qsize() == 0:
+                return False
+            elapsed = (datetime.now(timezone.utc) - self.first_item_time).total_seconds()
+            return elapsed >= self.flush_interval
+        
         elapsed = (datetime.now(timezone.utc) - self.last_flush_time).total_seconds()
         return elapsed >= self.flush_interval
 
