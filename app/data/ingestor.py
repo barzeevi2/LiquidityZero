@@ -245,10 +245,16 @@ async def main():
     main entry point for the ingestor service
     """
     ingestor = IngestorService()
+    shutdown_requested = False
 
     def signal_handler(signum, frame):
+        nonlocal shutdown_requested
+        if shutdown_requested:
+            return  # Prevent multiple shutdown attempts
+        shutdown_requested = True
         logger.info(f"Received signal {signum}, initiating graceful shutdown...")
-        asyncio.create_task(ingestor.stop())
+        # Set the shutdown event directly (thread-safe)
+        ingestor.shutdown_event.set()
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)

@@ -18,7 +18,7 @@ class OrderBook:
     """
 
     def __init__(self, symbol:str):
-        this.symbol = symbol
+        self.symbol = symbol
 
         #SortedDict: price -> quantity at that price level
         #bids: descending (highest price first) reverse=True
@@ -62,8 +62,8 @@ class OrderBook:
             else:
                 self.asks[price_float] = quantity_float
 
-        bids_dict = dict(self.bids.items())
-        self.bids = SortedDict({k: v for k, v in sorted(bids_dict.items(), reverse=True)})
+        # SortedDict maintains ascending order automatically
+        #for bids (descending), we'll iterate in reverse when needed
 
         self.last_update_time = datetime.fromisoformat(
             snapshot.get('datetime', snapshot.get('timestamp', ''))
@@ -83,9 +83,7 @@ class OrderBook:
                 self.bids[price] += quantity
             else:
                 self.bids[price] = quantity
-                #resort
-                bids_dict = dict(self.bids.items())
-                self.bids = SortedDict({k: v for k, v in sorted(bids_dict.items(), reverse=True)})
+                
         else:  # SELL
             if price in self.asks:
                 self.asks[price] += quantity
@@ -95,7 +93,7 @@ class OrderBook:
         self.agent_orders[order_id] = (price, quantity, side)
     
 
-    def remove_agent_order(self, order_id: str) -> None:
+    def remove_agent_order(self, order_id: str) -> bool:
         """
         remove an agent order from the orderbook
         """
@@ -114,6 +112,8 @@ class OrderBook:
             
             del self.agent_orders[order_id]
             return True
+        
+        return False
 
     
     def get_best_bid(self) -> Optional[float]:
@@ -122,7 +122,8 @@ class OrderBook:
         """
         if not self.bids:
             return None
-        return self.bids.keys()[-1] #last key in descending order is the highest
+        # SortedDict maintains ascending order, so last key is highest
+        return list(self.bids.keys())[-1]
     
     def get_best_ask(self) -> Optional[float]:
         """
@@ -130,7 +131,8 @@ class OrderBook:
         """
         if not self.asks:
             return None
-        return self.asks.keys()[0] #first key in ascending order is the lowest
+        # SortedDict maintains ascending order, so first key is lowest
+        return next(iter(self.asks.keys()))
     
     def get_mid_price(self) -> Optional[float]:
         """
@@ -183,11 +185,59 @@ class OrderBook:
                     break
         else: #sell
             #for sell we want bids at or above price
-            for bid_price, quantity in self.bids.items():
+            # iterate in reverse (highest to lowest) to get best prices first
+            for bid_price, quantity in reversed(list(self.bids.items())):
                 if bid_price >= price:
-                    total += self.bids[bid_price]
+                    total += quantity
                 else:
                     break
         return total
         
+    
+
+    def get_imbalance(self) -> Optional[float]:
+        """
+        calculate order book imbalance (difference between buy and sell volume)
+        formula: (buy volume - sell volume) / (buy volume + sell volume)
+        range: -1 to 1
+        -1: all sell orders, no buy orders (bearish)
+        0: balanced (neutral)
+        1: all buy orders, no sell orders (bullish)
+
+        predicts short term price movement
+        important feature
+        """
+        #get volume at top 10 levels
+        #for bids, top levels are the last 10 (highest prices)
+        bid_items = list(self.bids.values())
+        bid_volume = sum(bid_items[-10:]) if len(bid_items) > 10 else sum(bid_items)
+        #for asks, top levels are the first 10 (lowest prices)
+        ask_items = list(self.asks.values())
+        ask_volume = sum(ask_items[:10])
+
+        total_volume = bid_volume + ask_volume
+        if total_volume ==0 :
+            return 0.0
         
+        return (bid_volume - ask_volume) / total_volume
+
+    
+
+    def get_depth_levels(self, n_levels: int) -> Tuple[List[List[float]], List[List[float]]]:
+        """
+        get price quantity pairs for top N levels on each side
+        returns: (bid_levels, ask_levels)
+        each level is a list [price, quantity]
+
+        used for feature engineering (orderbook depth)
+        """
+        #for bids, take last n_levels (highest prices) in reverse order
+        bid_items = list(self.bids.items())
+        bid_levels = [
+            [price, quantity] for price, quantity in reversed(bid_items[-n_levels:])
+        ]
+        #for asks, take first n_levels (lowest prices)
+        ask_levels = [
+            [price, quantity] for price, quantity in list(self.asks.items())[:n_levels]
+        ]
+        return bid_levels, ask_levels

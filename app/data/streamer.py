@@ -40,7 +40,8 @@ class OrderBookStreamer:
         self.max_backoff = max_backoff
         self.backoff_multiplier = backoff_multiplier
 
-        self.exchange: Optional[ccxt.pro.binance] = None
+        self.exchange_id = settings.EXCHANGE_ID
+        self.exchange: Optional[Any] = None
         self.is_running = False
         self.reconnect_count = 0
         self.last_message_time: Optional[datetime] = None
@@ -108,12 +109,17 @@ class OrderBookStreamer:
         }
         return normalized
 
-    async def _create_exchange(self) -> ccxt.pro.binance:
+    async def _create_exchange(self):
         """
-        creates and configures ccxt exchange instance (binance for now)
+        creates and configures ccxt exchange instance based on EXCHANGE_ID setting
+        supports binance and binanceus (for US users)
         returns the configured instance
         """
-        exchange = ccxt.pro.binance({
+        exchange_class = getattr(ccxt.pro, self.exchange_id, None)
+        if exchange_class is None:
+            raise ValueError(f"Unsupported exchange: {self.exchange_id}. Supported: binance, binanceus")
+        
+        exchange = exchange_class({
             'apiKey': '',
             'secret': '',
             'enableRateLimit': True,
@@ -121,7 +127,7 @@ class OrderBookStreamer:
                 'defaultType': 'spot'
             }
         })
-        logger.info(f"Created exchange instance for {self.symbol}")
+        logger.info(f"Created {self.exchange_id} exchange instance for {self.symbol}")
         return exchange
     
 
@@ -148,7 +154,7 @@ class OrderBookStreamer:
             try:
                 #create new exchange instance
                 self.exchange = await self._create_exchange()
-                logger.info(f"connecting to binance WebSocket for {self.symbol}...")
+                logger.info(f"Connecting to {self.exchange_id} WebSocket for {self.symbol}...")
 
                 #watch_order_book returns a coroutine that resolves to a single orderbook
                 while self.is_running:
