@@ -3,8 +3,8 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     PROJECT_NAME: str = "LiquidityZero"
 
-    #exhcnage config
-    EXCHANGE_ID: str="binance"
+    #exchange config
+    EXCHANGE_ID: str="binanceus"  # Options: "binance" or "binanceus" (for US users)
     SYMBOL: str="BTC/USDT"
 
     #simulator config
