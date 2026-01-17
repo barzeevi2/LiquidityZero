@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     SLIPPAGE_MODEL: str = "linear"
     
     #training environment config
-    MAX_STEPS: int = 1000 #maximum steps per episode
+    MAX_STEPS: int = 500 #maximum steps per episode (reduced from 1000 to reduce penalty accumulation)
     PRICE_TICK_SIZE: float = 0.01 #minimum price increment
     QUANTITY_PRECISION: int = 4 #decimal places for quantity
     MAX_QUANTITY: float = 1.0 #maximum order quantity

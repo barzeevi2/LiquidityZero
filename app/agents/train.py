@@ -100,9 +100,7 @@ def make_env(
             lookback_window = settings.LOOKBACK_WINDOW
         )
 
-        #set seed
-        env.seed(seed + rank)
-
+  
         #wrap with Monitor for statistics
 
         log_dir = Path("logs") / "training"
@@ -140,14 +138,14 @@ def create_training_envs(
 def train_agent(
     total_timesteps: int = 1000000,
     n_envs: int = 4,
-    learning_rate: float = 3e-4,
+    learning_rate: float = 2e-4,  
     batch_size: int = 64,
     n_steps: int = 2048,
-    n_epochs: int = 10,
+    n_epochs: int = 15, 
     gamma: float = 0.99,
     gae_lambda: float = 0.95,
     clip_range: float = 0.2,
-    ent_coef: float = 0.01,
+    ent_coef: float = 0.05,  
     vf_coef: float = 0.5,
     max_grad_norm: float = 0.5,
     features_dim: int = 256,
@@ -198,10 +196,10 @@ def train_agent(
     Path(model_save_path).parent.mkdir(parents=True, exist_ok=True)
     Path(tensorboard_log).mkdir(parents=True, exist_ok=True)
 
-    #default time range: last 7 days
     if start_time is None:
         end_time = datetime.now()
-        start_time = end_time - timedelta(days=7)
+ 
+        start_time = end_time - timedelta(days=7)  # Use 7 days for better diversity
     
 
     logger.info(f"Training from {start_time} to {end_time}")
@@ -217,9 +215,9 @@ def train_agent(
         random_start = True
     )
 
-    #create eval environment
+    #create eval environment - use random_start=True to match training
     logger.info("Creating evaluation environment...")
-    eval_env = DummyVecEnv([make_env(0, 42, start_time, end_time, False)])
+    eval_env = DummyVecEnv([make_env(0, 42, start_time, end_time, True)]) 
 
     #policy kwargs
     policy_kwargs = {}
@@ -248,12 +246,15 @@ def train_agent(
         gae_lambda = gae_lambda,
         clip_range = clip_range,
         ent_coef = ent_coef,
-        vf_coef = vf_coef,
+        vf_coef = vf_coef,  # 0.5 default - good for stable value learning
         max_grad_norm = max_grad_norm,
         policy_kwargs = policy_kwargs,
         tensorboard_log = tensorboard_log,
         verbose = 1,
-        device = "auto" 
+        device = "auto",
+        
+        clip_range_vf = 0.2,  
+        normalize_advantage = True,  
     )
 
     #setup callbacks
@@ -328,13 +329,13 @@ def main():
     parser = argparse.ArgumentParser(description="Train market making RL agent")
     parser.add_argument("--timesteps", type=int, default=100_000, help="Total training timesteps")
     parser.add_argument("--n-envs", type=int, default=4, help="Number of parallel environments")
-    parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate")
+    parser.add_argument("--lr", type=float, default=2e-4, help="Learning rate (reduced from 3e-4 for more stability in longer training)")
     parser.add_argument("--batch-size", type=int, default=64, help="Batch size")
     parser.add_argument("--n-steps", type=int, default=2048, help="Steps per update")
-    parser.add_argument("--n-epochs", type=int, default=10, help="Epochs per update")
+    parser.add_argument("--n-epochs", type=int, default=15, help="Epochs per update (increased from 10 to allow more gradual policy updates and reduce clip fraction)")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor")
     parser.add_argument("--clip-range", type=float, default=0.2, help="PPO clip range")
-    parser.add_argument("--ent-coef", type=float, default=0.01, help="Entropy coefficient")
+    parser.add_argument("--ent-coef", type=float, default=0.05, help="Entropy coefficient (increased for better exploration)")
     parser.add_argument("--features-dim", type=int, default=256, help="Feature extractor dimension")
     parser.add_argument("--no-custom-policy", action="store_true", help="Use default MLP policy")
     parser.add_argument("--model-path", type=str, default="models/market_making_ppo", help="Model save path")

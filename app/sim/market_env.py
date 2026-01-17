@@ -7,10 +7,13 @@ import gymnasium as gym
 from gymnasium import spaces
 from typing import Dict, Tuple, Optional, List
 from datetime import datetime, timedelta
+import logging
 
 from app.sim.market_simulator import MarketSimulator
 from app.sim.orders import LimitOrder, OrderSide
 from app.sim.exceptions import SimulationError
+
+logger = logging.getLogger(__name__)
 
 
 class MarketMakingEnv(gym.Env):
@@ -58,6 +61,9 @@ class MarketMakingEnv(gym.Env):
         #episode tracking
         self.current_step = 0
         self.price_history: List[float] = []
+        
+        #track order ages for reward shaping (steps since order was placed)
+        self.order_ages: Dict[str, int] = {}
 
         #define action space
         self.action_space = spaces.MultiDiscrete([
@@ -105,6 +111,7 @@ class MarketMakingEnv(gym.Env):
         
         self.current_step = 0
         self.price_history = []
+        self.order_ages = {}  #reset order ages on episode reset
 
         #initialize simulator
         if self.simulator is None:
@@ -115,14 +122,30 @@ class MarketMakingEnv(gym.Env):
             end_time = options.get('end_time') if options else None
 
             if start_time is None:
-                #default, last 24h
+                #default, last 7 days for better diversity
                 end_time = datetime.now()
-                start_time = end_time - timedelta(hours=24)
+                start_time = end_time - timedelta(days=7)
 
             
             #load data, this is async
+           
             import asyncio
-            asyncio.run(self.simulator.load_historical_data(start_time=start_time, end_time=end_time))
+            max_snapshots = options.get('max_snapshots') if options else 100000  # Increased from 50k
+            sample_interval = options.get('sample_interval') if options else None
+            
+           
+            days_diff = (end_time - start_time).days if end_time and start_time else 0
+            if sample_interval is None and days_diff >= 7:
+               
+                sample_interval = 5 if days_diff < 14 else 10
+                logger.info(f"Auto-sampling: using every {sample_interval}th snapshot to reduce data size (covering {days_diff} days)")
+            
+            asyncio.run(self.simulator.load_historical_data(
+                start_time=start_time, 
+                end_time=end_time,
+                max_snapshots=max_snapshots,
+                sample_interval=sample_interval
+            ))
         
         start_index = options.get('start_index') if options else 0
         if options and options.get('random_start', False):
@@ -149,16 +172,31 @@ class MarketMakingEnv(gym.Env):
         - action[3]: ask_quantity (0 to max quantity)
 
         steps:
-        1. cancel old orders if any
+        1. cancel old/unfilled orders (if placing new orders or orders too old)
         2. place new limit orders based on action
         3. advance market simulator
         4. calculate reward
         5. check done conditions
         """
-        #calcel existing orders
-        open_order_ids = list(self.simulator.portfolio.open_orders.keys())
-        for order_id in open_order_ids:
+        # Update order ages for all open orders
+        for order_id in list(self.simulator.portfolio.open_orders.keys()):
+            if order_id in self.order_ages:
+                self.order_ages[order_id] += 1
+            else:
+                self.order_ages[order_id] = 1
+        
+       
+        max_order_age = 30 
+        orders_to_cancel = []
+        for order_id, order in list(self.simulator.portfolio.open_orders.items()):
+            age = self.order_ages.get(order_id, 0)
+            if age > max_order_age and order.filled_quantity == 0:
+                orders_to_cancel.append(order_id)
+        
+        for order_id in orders_to_cancel:
             self.simulator.cancel_agent_order(order_id)
+            if order_id in self.order_ages:
+                del self.order_ages[order_id]
 
         #interpret action
         mid_price = self.simulator.orderbook.get_mid_price()
@@ -178,6 +216,20 @@ class MarketMakingEnv(gym.Env):
         ask_offset = int(action[2]) - 10
         ask_qty_idx = int(action[3])
 
+       
+        spread = self.simulator.orderbook.get_spread()
+        if spread and spread > 0:
+            spread_ticks = spread / self.price_tick_size
+            # Clamp offsets to be within reasonable range (max 2x spread)
+            max_offset_ticks = min(10, max(5, int(spread_ticks * 2)))
+            bid_offset = max(-max_offset_ticks, min(max_offset_ticks, bid_offset))
+            ask_offset = max(-max_offset_ticks, min(max_offset_ticks, ask_offset))
+        else:
+           
+            bid_offset = max(-5, min(5, bid_offset))
+            ask_offset = max(-5, min(5, ask_offset))
+
+        
         bid_price = mid_price + (bid_offset * self.price_tick_size)
         bid_quantity = (bid_qty_idx / self.n_quantity_levels) * self.max_quantity
         ask_price = mid_price + (ask_offset * self.price_tick_size)
@@ -189,8 +241,15 @@ class MarketMakingEnv(gym.Env):
         bid_quantity = round(bid_quantity, self.quantity_precision)
         ask_quantity = round(ask_quantity, self.quantity_precision)
 
-        #place new orders
+       
         if bid_quantity > 0:
+            # Cancel existing buy orders
+            for order_id, order in list(self.simulator.portfolio.open_orders.items()):
+                if order.side == OrderSide.BUY:
+                    self.simulator.cancel_agent_order(order_id)
+                    if order_id in self.order_ages:
+                        del self.order_ages[order_id]
+            
             bid_order = LimitOrder(
                 symbol = self.symbol,
                 side = OrderSide.BUY,
@@ -199,12 +258,21 @@ class MarketMakingEnv(gym.Env):
             )
             try:
                 self.simulator.place_agent_order(bid_order)
+                # initialize age tracking for new order
+                self.order_ages[bid_order.order_id] = 0
             except ValueError as e:
                 #not enough liquidity, skip
                 pass
         
 
         if ask_quantity > 0:
+            
+            for order_id, order in list(self.simulator.portfolio.open_orders.items()):
+                if order.side == OrderSide.SELL:
+                    self.simulator.cancel_agent_order(order_id)
+                    if order_id in self.order_ages:
+                        del self.order_ages[order_id]
+            
             ask_order = LimitOrder(
                 symbol = self.symbol,
                 side = OrderSide.SELL,
@@ -213,6 +281,7 @@ class MarketMakingEnv(gym.Env):
             )
             try:
                 self.simulator.place_agent_order(ask_order)
+                self.order_ages[ask_order.order_id] = 0
             except ValueError as e:
                 #not enough position, skip
                 pass
@@ -225,6 +294,11 @@ class MarketMakingEnv(gym.Env):
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
         has_more = loop.run_until_complete(self.simulator.step())
+        
+        # Clean up order ages for filled/cancelled orders
+        for order_id in list(self.order_ages.keys()):
+            if order_id not in self.simulator.portfolio.open_orders:
+                del self.order_ages[order_id]
         
         #reward
         reward = self._calculate_reward()
@@ -242,10 +316,20 @@ class MarketMakingEnv(gym.Env):
 
         #stop loss / take profit (optional)
         portfolio_stats = self.simulator.portfolio.get_stats(current_price = mid_price)
-        if portfolio_stats['total_value'] < self.initial_cash * 0.5:
+        if portfolio_stats['total_value'] < self.initial_cash * 0.2:  # Tightened to 20% for earlier intervention
             terminated = True
+
+            reward = max(reward, -10.0)
+        
+      
+        reward = max(-50.0, min(50.0, reward))
+        
         observation = self._get_observation()
         info = self._get_info()
+        
+        if terminated or truncated:
+            info['episode_reward'] = reward  # Final reward is already clipped
+            
         return observation, reward, terminated, truncated, info
     
 
@@ -309,12 +393,13 @@ class MarketMakingEnv(gym.Env):
         """
         calculate reward for RL agent
 
-        reward = realized_pnl + alpha * unrealized_pnl - beta * inventory_penalty
+        reward = realized_pnl + alpha * unrealized_pnl - beta * inventory_penalty + reward_shaping
 
         why this?
         realized pnl is the actual profit from filled orders
         unrealized pnl is lower weight mark to market value
-        penalize large positions (RM
+        penalize large positions (RM)
+        reward shaping: encourage placing orders near spread to get fills
         """
         mid_price = self.simulator.orderbook.get_mid_price()
         if mid_price is None:
@@ -323,19 +408,73 @@ class MarketMakingEnv(gym.Env):
         #get portfolio stats
         portfolio_stats = self.simulator.portfolio.get_stats(current_price = mid_price)
 
-        #primary reward
-        realized_pnl = portfolio_stats['realized_pnl'] / self.initial_cash
+      
+        realized_pnl = (portfolio_stats['realized_pnl'] / self.initial_cash) * 10
 
-        #secondary reward
-        alpha = 0.1
-        unrealized_pnl = portfolio_stats.get('unrealized_pnl', 0.0) / self.initial_cash
+        
+        alpha = 0.05  
+        unrealized_pnl = (portfolio_stats.get('unrealized_pnl', 0.0) / self.initial_cash) * 10
 
-        #inventory penalty
-        beta = 0.05
+        
+        max_position_value = self.initial_cash * 0.5  
         position_value = abs(portfolio_stats['position'] * mid_price)
-        inventory_penalty = (position_value / self.initial_cash) ** 2
+        
+        beta = 0.1  
+        if position_value > max_position_value:
+            excess = position_value - max_position_value
+            inventory_penalty = (max_position_value / self.initial_cash) * 10 + (excess / self.initial_cash) * 20
+        else:
+            inventory_penalty = (position_value / self.initial_cash) * 10
 
         reward = realized_pnl + (alpha * unrealized_pnl) - (beta * inventory_penalty)
+
+        spread = self.simulator.orderbook.get_spread()
+        best_bid = self.simulator.orderbook.get_best_bid()
+        best_ask = self.simulator.orderbook.get_best_ask()
+        
+        if spread and spread > 0 and best_bid and best_ask:
+            placement_reward = 0.0
+            spread_ticks = spread / self.price_tick_size
+            
+            for order in self.simulator.portfolio.open_orders.values():
+                if hasattr(order, 'side') and hasattr(order, 'price'):
+                    if order.side.value == 'BUY':
+                        distance_ticks = abs(order.price - best_bid) / self.price_tick_size
+                        if order.price >= best_bid:
+                            placement_reward += 0.001  # Reduced to match new scaling (10x instead of 100x)
+                        elif distance_ticks <= 3:
+                            placement_reward += 0.0005 * (1 - distance_ticks / 3)  # Reduced scaling
+                    else:  # SELL
+                        distance_ticks = abs(order.price - best_ask) / self.price_tick_size
+                        if order.price <= best_ask:
+                            placement_reward += 0.001  # Reduced to match new scaling
+                        elif distance_ticks <= 3:
+                            # Within 3 ticks of best ask - decreasing reward
+                            placement_reward += 0.0005 * (1 - distance_ticks / 3)  # Reduced scaling
+            
+
+            if len(self.simulator.portfolio.open_orders) >= 2:
+                has_bid = any(o.side.value == 'BUY' for o in self.simulator.portfolio.open_orders.values())
+                has_ask = any(o.side.value == 'SELL' for o in self.simulator.portfolio.open_orders.values())
+                if has_bid and has_ask:
+                    placement_reward += 0.0001  
+            
+            reward += placement_reward
+        
+
+        unfilled_penalty = 0.0
+        for order_id, order in self.simulator.portfolio.open_orders.items():
+            if order.filled_quantity == 0:
+                age = self.order_ages.get(order_id, 0)
+               
+                if age > 20:
+                    penalty = min(0.001 * (age - 20), 0.01)  ]
+                    unfilled_penalty += penalty
+        
+        reward -= unfilled_penalty
+        
+
+        reward = max(-10.0, min(10.0, reward))
 
         return float(reward)
 
@@ -366,13 +505,59 @@ class MarketMakingEnv(gym.Env):
         get additional info for monitoring / debugging
         """
         mid_price = self.simulator.orderbook.get_mid_price()
+        portfolio_stats = self.simulator.portfolio.get_stats(current_price = mid_price)
+        
+        # Diagnostic logging: track order placement and fill statistics
+        open_orders = list(self.simulator.portfolio.open_orders.values())
+        order_stats = {
+            'num_orders': len(open_orders),
+            'num_filled': sum(1 for o in open_orders if o.filled_quantity > 0),
+            'num_partial': sum(1 for o in open_orders if o.status.value == 'PARTIALLY_FILLED'),
+            'avg_distance_from_mid': 0.0,
+            'avg_order_age': 0.0,
+            'orders_near_spread': 0
+        }
+        
+        if open_orders and mid_price:
+            distances = []
+            ages = []
+            spread = self.simulator.orderbook.get_spread() or 0.0
+            best_bid = self.simulator.orderbook.get_best_bid() or mid_price
+            best_ask = self.simulator.orderbook.get_best_ask() or mid_price
+            
+            for order in open_orders:
+                if hasattr(order, 'price'):
+                    distance = abs(order.price - mid_price)
+                    distances.append(distance)
+                    
+                    # Check if order is near spread (within 3 ticks)
+                    if order.side.value == 'BUY':
+                        if abs(order.price - best_bid) <= 3 * self.price_tick_size:
+                            order_stats['orders_near_spread'] += 1
+                    else:  # SELL
+                        if abs(order.price - best_ask) <= 3 * self.price_tick_size:
+                            order_stats['orders_near_spread'] += 1
+                
+                # Track order age
+                order_id = order.order_id
+                if order_id in self.order_ages:
+                    ages.append(self.order_ages[order_id])
+            
+            if distances:
+                order_stats['avg_distance_from_mid'] = float(np.mean(distances))
+            if ages:
+                order_stats['avg_order_age'] = float(np.mean(ages))
+        
         return {
             'step': self.current_step,
-            'portfolio': self.simulator.portfolio.get_stats(current_price = mid_price),
+            'portfolio': portfolio_stats,
             'market': {
                 'mid_price': mid_price,
                 'spread': self.simulator.orderbook.get_spread(),
-            }
+                'best_bid': self.simulator.orderbook.get_best_bid(),
+                'best_ask': self.simulator.orderbook.get_best_ask(),
+            },
+            'orders': order_stats  # Diagnostic information
         }
     
     def render(self, mode: str = 'human'):

@@ -29,7 +29,7 @@ class FeatureNormalizer:
         """
         update running stats for features
         """
-        # Validate dimension
+        
         expected_dim = self.feature_mean.shape[0]
         if features.ndim > 1:
             actual_dim = features.shape[1]
@@ -63,7 +63,7 @@ class FeatureNormalizer:
         """
         normalize features using running stats
         """
-        # Validate dimension
+        
         expected_dim = self.feature_mean.shape[0]
         if features.ndim > 1:
             actual_dim = features.shape[1]

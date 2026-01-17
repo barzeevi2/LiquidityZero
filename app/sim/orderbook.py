@@ -44,23 +44,46 @@ class OrderBook:
         
 
         #bids: price -> quantity will be sorted in descending order
-        for price, quantity in snapshot['bids']:
-            price_float = float(price)
-            quantity_float = float(quantity)
-            if price_float in self.bids:
-                self.bids[price_float] += quantity_float
-            else:
-                self.bids[price_float] = quantity_float
+        # Validate bids format before processing
+        bids = snapshot.get('bids', [])
+        if not isinstance(bids, list):
+            raise ValueError(f"Invalid bids format: expected list, got {type(bids)}")
         
+        for bid_entry in bids:
+            try:
+                if not isinstance(bid_entry, (list, tuple)) or len(bid_entry) != 2:
+                    continue  # Skip malformed entries
+                price, quantity = bid_entry
+                price_float = float(price)
+                quantity_float = float(quantity)
+                if price_float in self.bids:
+                    self.bids[price_float] += quantity_float
+                else:
+                    self.bids[price_float] = quantity_float
+            except (ValueError, TypeError, IndexError) as e:
+                # Skip malformed bid entries
+                continue
 
         #asks: price -> quantity will be sorted in ascending order
-        for price, quantity in snapshot['asks']:
-            price_float = float(price)
-            quantity_float = float(quantity)
-            if price_float in self.asks:
-                self.asks[price_float] += quantity_float
-            else:
-                self.asks[price_float] = quantity_float
+        # Validate asks format before processing
+        asks = snapshot.get('asks', [])
+        if not isinstance(asks, list):
+            raise ValueError(f"Invalid asks format: expected list, got {type(asks)}")
+        
+        for ask_entry in asks:
+            try:
+                if not isinstance(ask_entry, (list, tuple)) or len(ask_entry) != 2:
+                    continue  # Skip malformed entries
+                price, quantity = ask_entry
+                price_float = float(price)
+                quantity_float = float(quantity)
+                if price_float in self.asks:
+                    self.asks[price_float] += quantity_float
+                else:
+                    self.asks[price_float] = quantity_float
+            except (ValueError, TypeError, IndexError) as e:
+                # Skip malformed ask entries
+                continue
 
         # SortedDict maintains ascending order automatically
         #for bids (descending), we'll iterate in reverse when needed

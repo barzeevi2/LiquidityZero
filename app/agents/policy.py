@@ -60,8 +60,7 @@ class MarketMakingFeatureExtractor(BaseFeaturesExtractor):
 
         x = observations
         
-        # Handle 3D tensors by flattening sequence dimension
-        # (3D tensors are not standard for RL training, but we support them)
+       
         original_shape = None
         if x.dim() == 3:
             batch_size, seq_len, features = x.shape
